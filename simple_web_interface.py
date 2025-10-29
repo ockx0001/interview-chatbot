@@ -37,18 +37,26 @@ def load_config():
     
     # Validate required configuration
     if not config['openai_api_key']:
-        print("ERROR: OPENAI_API_KEY environment variable not set!")
-        print("\nTo fix this, either:")
-        print("1. Set environment variable: export OPENAI_API_KEY='your-api-key-here'")
-        print("2. Create a .env file with: OPENAI_API_KEY=your-api-key-here")
-        print("3. Install python-dotenv: pip install python-dotenv")
-        exit(1)
+        error_msg = (
+            "ERROR: OPENAI_API_KEY environment variable not set!\n\n"
+            "To fix this, either:\n"
+            "1. Set environment variable: export OPENAI_API_KEY='your-api-key-here'\n"
+            "2. Create a .env file with: OPENAI_API_KEY=your-api-key-here\n"
+            "3. Install python-dotenv: pip install python-dotenv"
+        )
+        print(error_msg)
+        # In production, don't exit - let the app start and show error on first request
+        # This allows Railway to show the service as running even if env var is missing
+        if os.environ.get('PORT'):  # If PORT is set, we're in production
+            print("Warning: App starting without API key. Add OPENAI_API_KEY to Railway variables.")
+        else:
+            exit(1)
     
     return config
 
 # Load configuration
 config = load_config()
-OPENAI_API_KEY = config['openai_api_key']
+OPENAI_API_KEY = config.get('openai_api_key')  # Use .get() to handle None gracefully
 
 def generate_unique_id():
     """Generate a unique identifier for respondents"""
@@ -137,6 +145,8 @@ user_sessions = load_conversations()
 
 def chat_with_gpt(conversation_history):
     """Function to interact with OpenAI API"""
+    if not OPENAI_API_KEY:
+        return "Error: OpenAI API key not configured. Please add OPENAI_API_KEY to Railway environment variables."
     try:
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         response = client.chat.completions.create(
@@ -151,6 +161,8 @@ def chat_with_gpt(conversation_history):
 
 def score_interview(conversation_history):
     """Function to score interview responses for grandiose narcissism"""
+    if not OPENAI_API_KEY:
+        return "Error: OpenAI API key not configured. Please add OPENAI_API_KEY to Railway environment variables."
     try:
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         
