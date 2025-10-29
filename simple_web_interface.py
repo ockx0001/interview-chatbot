@@ -831,7 +831,7 @@ HTML_TEMPLATE = """
                 const data = await response.json();
                 
                 if (data.unique_id) {
-                    const survey_url = "https://your-survey-url-here.com"; // Update this when survey is ready
+                    const survey_url = "https://docs.google.com/forms/d/e/1FAIpQLSebDBBQQr0naKWatJd8fEUVsrfKKWBnFlEBq97LEMjl3l9CHg/viewform?usp=publish-editor";
                     const completionMessage = `Thanks for completing the interview! Please now complete the self-report questionnaire at:\n${survey_url}\n\nWhen prompted, enter your unique user ID: ${data.unique_id}`;
                     addMessage(completionMessage, true);
                 } else {
