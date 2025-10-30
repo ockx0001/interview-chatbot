@@ -874,6 +874,18 @@ HTML_TEMPLATE = """
 </html>
 """
 
+@app.route('/health', methods=['GET'])
+def health():
+    """Minimal health/status endpoint to verify service and env configuration."""
+    try:
+        key_present = bool(OPENAI_API_KEY)
+    except Exception:
+        key_present = False
+    return jsonify({
+        "status": "ok",
+        "openai_key_present": key_present
+    })
+
 @app.route('/')
 def home():
     return render_template_string(HTML_TEMPLATE)
