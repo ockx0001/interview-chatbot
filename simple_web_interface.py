@@ -511,7 +511,6 @@ HTML_TEMPLATE = """
                 <div class="sidebar-title">Interview Chatbot</div>
             </div>
             <button class="new-chat-btn" onclick="startInterview()">🚀 Start Interview</button>
-            <button class="new-chat-btn" onclick="clearChat()">🗑️ Clear Chat</button>
             
             <div class="instructions">
                 <h3>Interview Instructions</h3>
