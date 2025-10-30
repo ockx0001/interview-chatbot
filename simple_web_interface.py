@@ -67,8 +67,8 @@ def generate_unique_id():
     # Combine timestamp and random part for uniqueness
     unique_id = f"{timestamp}-{random_part}"
     
-    # Create a shorter, more readable format
-    readable_id = f"{timestamp[-6:]}-{random_part[:6]}"
+    # Create a shorter, more readable format (4-4)
+    readable_id = f"{timestamp[-4:]}-{random_part[:4]}"
     
     return readable_id, unique_id
 
