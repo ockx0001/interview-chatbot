@@ -360,6 +360,11 @@ HTML_TEMPLATE = """
             color: #ececf1;
         }
         
+        .message-content a {
+            color: #10a37f;
+            text-decoration: underline;
+        }
+        
         .input-container {
             padding: 20px;
             border-top: 1px solid #4a4b53;
@@ -618,6 +623,29 @@ HTML_TEMPLATE = """
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
+        function addMessageHTML(content, isAI = false) {
+            const chatContainer = document.getElementById('chatContainer');
+            const messageGroup = document.createElement('div');
+            messageGroup.className = 'message-group';
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isAI ? 'ai-message' : 'user-message'}`;
+            
+            const avatar = document.createElement('div');
+            avatar.className = `message-avatar ${isAI ? 'ai-avatar' : 'user-avatar'}`;
+            avatar.textContent = isAI ? 'AI' : 'You';
+            
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+            messageContent.innerHTML = content;
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(messageContent);
+            messageGroup.appendChild(messageDiv);
+            chatContainer.appendChild(messageGroup);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
         function showTyping() {
             const chatContainer = document.getElementById('chatContainer');
             const messageGroup = document.createElement('div');
@@ -845,8 +873,15 @@ HTML_TEMPLATE = """
                 if (data.unique_id) {
                     // Google Forms survey link for post-interview questionnaire
                     const survey_url = "https://docs.google.com/forms/d/e/1FAIpQLSebDBBQQr0naKWatJd8fEUVsrfKKWBnFlEBq97LEMjl3l9CHg/viewform?usp=publish-editor";
-                    const completionMessage = `Thanks for completing the interview! Please now complete the self-report questionnaire at:\n${survey_url}\n\nWhen prompted, enter your unique user ID: ${data.unique_id}`;
-                    addMessage(completionMessage, true);
+                    const completionMessageHTML = `
+                        <div>Thanks for completing the interview!</div>
+                        <div style="margin-top:8px;">Please now complete the self-report questionnaire here:
+                            <br><a href="${survey_url}" target="_blank" rel="noopener noreferrer">Open the self-report questionnaire</a>
+                        </div>
+                        <div style="margin-top:12px;"><strong>Your unique user ID:</strong></div>
+                        <div><code style="font-size:16px; padding:2px 6px; background:#2b2c36; border-radius:4px;">${data.unique_id}</code></div>
+                    `;
+                    addMessageHTML(completionMessageHTML, true);
                 } else {
                     addMessage("Thank you for completing the interview! Your responses have been recorded.", true);
                 }
