@@ -559,7 +559,7 @@ HTML_TEMPLATE = """
                     <div class="message ai-message">
                         <div class="message-avatar ai-avatar">AI</div>
                         <div class="message-content">
-                            Welcome! I'm your AI interviewer. Click "Start Interview" to begin your practice session.
+                            Welcome! I'm your AI interviewer. Please read the instructions in the left panel carefully, and click "Start Interview" to begin your interview session.
                         </div>
                     </div>
                 </div>
@@ -833,7 +833,7 @@ HTML_TEMPLATE = """
                     <div class="message ai-message">
                     <div class="message-avatar ai-avatar">AI</div>
                     <div class="message-content">
-                        Welcome! I'm your AI interviewer. Click "Start Interview" to begin your practice session.
+                        Welcome! I'm your AI interviewer. Please read the instructions in the left panel carefully, and click "Start Interview" to begin your interview session.
                     </div>
                 </div>
             `;
