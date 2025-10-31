@@ -11,14 +11,13 @@ import hashlib
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 
-# AWS S3 support for external storage
+# Microsoft OneDrive support for external storage
 try:
-    import boto3
-    from botocore.exceptions import ClientError
-    S3_AVAILABLE = True
+    import requests
+    ONEDRIVE_AVAILABLE = True
 except ImportError:
-    S3_AVAILABLE = False
-    print("boto3 not installed. Install with: pip install boto3")
+    ONEDRIVE_AVAILABLE = False
+    print("requests not installed. Install with: pip install requests")
 
 # Try to load environment variables from .env file
 try:
@@ -127,56 +126,67 @@ SCORING_PROMPT = (
     "}"
 )
 
-# Storage configuration - supports S3 or local file
-USE_S3 = os.environ.get('AWS_S3_BUCKET') is not None
-S3_BUCKET = os.environ.get('AWS_S3_BUCKET')
-S3_KEY = os.environ.get('AWS_S3_KEY', 'conversations.json')
-AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
-AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+# Storage configuration - supports OneDrive or local file
+USE_ONEDRIVE = os.environ.get('ONEDRIVE_ACCESS_TOKEN') is not None
+ONEDRIVE_ACCESS_TOKEN = os.environ.get('ONEDRIVE_ACCESS_TOKEN')
+ONEDRIVE_FILE_NAME = os.environ.get('ONEDRIVE_FILE_NAME', 'conversations.json')
+ONEDRIVE_FOLDER_PATH = os.environ.get('ONEDRIVE_FOLDER_PATH', 'InterviewChatbot')
 
 # Local file storage (fallback)
 STORAGE_PATH = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', os.path.dirname(os.path.abspath(__file__)))
 CONVERSATIONS_FILE = os.path.join(STORAGE_PATH, "conversations.json")
 
-def get_s3_client():
-    """Get S3 client if credentials are available"""
-    if not S3_AVAILABLE or not USE_S3:
+def get_onedrive_file_id():
+    """Get OneDrive file ID if file exists, or None if it doesn't"""
+    if not ONEDRIVE_AVAILABLE or not USE_ONEDRIVE:
         return None
+    
     try:
-        if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
-            return boto3.client(
-                's3',
-                aws_access_key_id=AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-                region_name=AWS_REGION
-            )
-        else:
-            # Try using default credentials (IAM role, etc.)
-            return boto3.client('s3', region_name=AWS_REGION)
+        # First, check if folder exists, create if not
+        folder_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{ONEDRIVE_FOLDER_PATH}"
+        headers = {
+            'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Check if folder exists
+        response = requests.get(folder_url, headers=headers)
+        if response.status_code == 404:
+            # Create folder
+            folder_create_url = "https://graph.microsoft.com/v1.0/me/drive/root/children"
+            folder_data = {
+                "name": ONEDRIVE_FOLDER_PATH,
+                "folder": {}
+            }
+            requests.post(folder_create_url, headers=headers, json=folder_data)
+        
+        # Check if file exists
+        file_url = f"{folder_url}/{ONEDRIVE_FILE_NAME}"
+        response = requests.get(file_url, headers=headers)
+        if response.status_code == 200:
+            return response.json().get('id')
+        return None
     except Exception as e:
-        print(f"Error creating S3 client: {e}")
+        print(f"Error checking OneDrive file: {e}")
         return None
 
 def load_conversations():
-    """Load conversations from S3 or local file"""
-    if USE_S3:
-        s3_client = get_s3_client()
-        if s3_client:
-            try:
-                response = s3_client.get_object(Bucket=S3_BUCKET, Key=S3_KEY)
-                content = response['Body'].read().decode('utf-8')
-                return json.loads(content)
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # File doesn't exist yet, return empty dict
-                    return {}
-                else:
-                    print(f"Error loading from S3: {e}")
-                    return {}
-            except Exception as e:
-                print(f"Error loading from S3: {e}")
-                return {}
+    """Load conversations from OneDrive or local file"""
+    if USE_ONEDRIVE:
+        try:
+            file_id = get_onedrive_file_id()
+            if file_id:
+                # File exists, download it
+                download_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}/content"
+                headers = {'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}'}
+                response = requests.get(download_url, headers=headers)
+                if response.status_code == 200:
+                    return json.loads(response.text)
+            # File doesn't exist yet, return empty dict
+            return {}
+        except Exception as e:
+            print(f"Error loading from OneDrive: {e}")
+            print("Falling back to local file storage...")
     
     # Fallback to local file
     try:
@@ -189,23 +199,35 @@ def load_conversations():
         return {}
 
 def save_conversations(conversations):
-    """Save conversations to S3 or local file"""
-    if USE_S3:
-        s3_client = get_s3_client()
-        if s3_client:
-            try:
-                content = json.dumps(conversations, indent=2)
-                s3_client.put_object(
-                    Bucket=S3_BUCKET,
-                    Key=S3_KEY,
-                    Body=content.encode('utf-8'),
-                    ContentType='application/json'
-                )
-                return
-            except Exception as e:
-                print(f"Error saving to S3: {e}")
-                # Fallback to local file if S3 fails
-                print("Falling back to local file storage...")
+    """Save conversations to OneDrive or local file"""
+    if USE_ONEDRIVE:
+        try:
+            content = json.dumps(conversations, indent=2)
+            file_id = get_onedrive_file_id()
+            
+            folder_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{ONEDRIVE_FOLDER_PATH}"
+            headers = {
+                'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}',
+                'Content-Type': 'application/json'
+            }
+            
+            if file_id:
+                # File exists, update it
+                upload_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}/content"
+                response = requests.put(upload_url, headers={'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}'}, data=content.encode('utf-8'))
+                if response.status_code in [200, 201]:
+                    return
+            else:
+                # File doesn't exist, create it
+                upload_url = f"{folder_url}/{ONEDRIVE_FILE_NAME}:/content"
+                response = requests.put(upload_url, headers={'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}'}, data=content.encode('utf-8'))
+                if response.status_code in [200, 201]:
+                    return
+            print(f"Error saving to OneDrive: Status {response.status_code}")
+            print("Falling back to local file storage...")
+        except Exception as e:
+            print(f"Error saving to OneDrive: {e}")
+            print("Falling back to local file storage...")
     
     # Fallback to local file
     try:
@@ -992,21 +1014,27 @@ def health():
         key_present = False
     
     # Check storage configuration
-    storage_type = "S3" if USE_S3 else "local"
+    storage_type = "OneDrive" if USE_ONEDRIVE else "local"
     storage_info = {}
     
-    if USE_S3:
-        s3_client = get_s3_client()
-        s3_working = s3_client is not None
+    if USE_ONEDRIVE:
+        # Test OneDrive connection
+        onedrive_working = False
+        try:
+            test_url = "https://graph.microsoft.com/v1.0/me/drive/root"
+            headers = {'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}'}
+            response = requests.get(test_url, headers=headers)
+            onedrive_working = response.status_code == 200
+        except:
+            pass
+        
         storage_info = {
-            "type": "S3",
-            "bucket": S3_BUCKET,
-            "key": S3_KEY,
-            "region": AWS_REGION,
-            "s3_available": S3_AVAILABLE,
-            "s3_client_configured": s3_working,
-            "access_key_set": bool(AWS_ACCESS_KEY_ID),
-            "secret_key_set": bool(AWS_SECRET_ACCESS_KEY)
+            "type": "OneDrive",
+            "folder_path": ONEDRIVE_FOLDER_PATH,
+            "file_name": ONEDRIVE_FILE_NAME,
+            "onedrive_available": ONEDRIVE_AVAILABLE,
+            "onedrive_configured": onedrive_working,
+            "access_token_set": bool(ONEDRIVE_ACCESS_TOKEN)
         }
     else:
         storage_path = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', 'Not set')
