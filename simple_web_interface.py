@@ -119,7 +119,9 @@ SCORING_PROMPT = (
 )
 
 # File to store conversations
-CONVERSATIONS_FILE = "conversations.json"
+# Use persistent volume path if available (Railway), otherwise use current directory
+STORAGE_PATH = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', os.path.dirname(os.path.abspath(__file__)))
+CONVERSATIONS_FILE = os.path.join(STORAGE_PATH, "conversations.json")
 
 def load_conversations():
     """Load conversations from JSON file"""
@@ -135,6 +137,8 @@ def load_conversations():
 def save_conversations(conversations):
     """Save conversations to JSON file"""
     try:
+        # Ensure directory exists
+        os.makedirs(STORAGE_PATH, exist_ok=True)
         with open(CONVERSATIONS_FILE, 'w') as f:
             json.dump(conversations, f, indent=2)
     except Exception as e:
