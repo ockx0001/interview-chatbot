@@ -11,6 +11,15 @@ import hashlib
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 
+# AWS S3 support for external storage
+try:
+    import boto3
+    from botocore.exceptions import ClientError
+    S3_AVAILABLE = True
+except ImportError:
+    S3_AVAILABLE = False
+    print("boto3 not installed. Install with: pip install boto3")
+
 # Try to load environment variables from .env file
 try:
     from dotenv import load_dotenv
@@ -118,13 +127,58 @@ SCORING_PROMPT = (
     "}"
 )
 
-# File to store conversations
-# Use persistent volume path if available (Railway), otherwise use current directory
+# Storage configuration - supports S3 or local file
+USE_S3 = os.environ.get('AWS_S3_BUCKET') is not None
+S3_BUCKET = os.environ.get('AWS_S3_BUCKET')
+S3_KEY = os.environ.get('AWS_S3_KEY', 'conversations.json')
+AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
+AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+
+# Local file storage (fallback)
 STORAGE_PATH = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', os.path.dirname(os.path.abspath(__file__)))
 CONVERSATIONS_FILE = os.path.join(STORAGE_PATH, "conversations.json")
 
+def get_s3_client():
+    """Get S3 client if credentials are available"""
+    if not S3_AVAILABLE or not USE_S3:
+        return None
+    try:
+        if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
+            return boto3.client(
+                's3',
+                aws_access_key_id=AWS_ACCESS_KEY_ID,
+                aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+                region_name=AWS_REGION
+            )
+        else:
+            # Try using default credentials (IAM role, etc.)
+            return boto3.client('s3', region_name=AWS_REGION)
+    except Exception as e:
+        print(f"Error creating S3 client: {e}")
+        return None
+
 def load_conversations():
-    """Load conversations from JSON file"""
+    """Load conversations from S3 or local file"""
+    if USE_S3:
+        s3_client = get_s3_client()
+        if s3_client:
+            try:
+                response = s3_client.get_object(Bucket=S3_BUCKET, Key=S3_KEY)
+                content = response['Body'].read().decode('utf-8')
+                return json.loads(content)
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'NoSuchKey':
+                    # File doesn't exist yet, return empty dict
+                    return {}
+                else:
+                    print(f"Error loading from S3: {e}")
+                    return {}
+            except Exception as e:
+                print(f"Error loading from S3: {e}")
+                return {}
+    
+    # Fallback to local file
     try:
         if os.path.exists(CONVERSATIONS_FILE):
             with open(CONVERSATIONS_FILE, 'r') as f:
@@ -135,9 +189,26 @@ def load_conversations():
         return {}
 
 def save_conversations(conversations):
-    """Save conversations to JSON file"""
+    """Save conversations to S3 or local file"""
+    if USE_S3:
+        s3_client = get_s3_client()
+        if s3_client:
+            try:
+                content = json.dumps(conversations, indent=2)
+                s3_client.put_object(
+                    Bucket=S3_BUCKET,
+                    Key=S3_KEY,
+                    Body=content.encode('utf-8'),
+                    ContentType='application/json'
+                )
+                return
+            except Exception as e:
+                print(f"Error saving to S3: {e}")
+                # Fallback to local file if S3 fails
+                print("Falling back to local file storage...")
+    
+    # Fallback to local file
     try:
-        # Ensure directory exists
         os.makedirs(STORAGE_PATH, exist_ok=True)
         with open(CONVERSATIONS_FILE, 'w') as f:
             json.dump(conversations, f, indent=2)
@@ -921,20 +992,39 @@ def health():
         key_present = False
     
     # Check storage configuration
-    storage_path = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', 'Not set')
-    storage_path_exists = os.path.exists(STORAGE_PATH) if storage_path != 'Not set' else False
-    conversations_file_exists = os.path.exists(CONVERSATIONS_FILE)
+    storage_type = "S3" if USE_S3 else "local"
+    storage_info = {}
     
-    return jsonify({
-        "status": "ok",
-        "openai_key_present": key_present,
-        "storage_config": {
+    if USE_S3:
+        s3_client = get_s3_client()
+        s3_working = s3_client is not None
+        storage_info = {
+            "type": "S3",
+            "bucket": S3_BUCKET,
+            "key": S3_KEY,
+            "region": AWS_REGION,
+            "s3_available": S3_AVAILABLE,
+            "s3_client_configured": s3_working,
+            "access_key_set": bool(AWS_ACCESS_KEY_ID),
+            "secret_key_set": bool(AWS_SECRET_ACCESS_KEY)
+        }
+    else:
+        storage_path = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', 'Not set')
+        storage_path_exists = os.path.exists(STORAGE_PATH) if storage_path != 'Not set' else False
+        conversations_file_exists = os.path.exists(CONVERSATIONS_FILE)
+        storage_info = {
+            "type": "local",
             "volume_mount_path_env": storage_path,
             "storage_path": STORAGE_PATH,
             "storage_path_exists": storage_path_exists,
             "conversations_file_exists": conversations_file_exists,
             "conversations_file_path": CONVERSATIONS_FILE
         }
+    
+    return jsonify({
+        "status": "ok",
+        "openai_key_present": key_present,
+        "storage_config": storage_info
     })
 
 @app.route('/')
