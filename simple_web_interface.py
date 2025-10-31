@@ -11,13 +11,17 @@ import hashlib
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 
-# Microsoft OneDrive support for external storage
+# Google Drive support for external storage
 try:
-    import requests
-    ONEDRIVE_AVAILABLE = True
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+    from googleapiclient.errors import HttpError
+    import io
+    GOOGLE_DRIVE_AVAILABLE = True
 except ImportError:
-    ONEDRIVE_AVAILABLE = False
-    print("requests not installed. Install with: pip install requests")
+    GOOGLE_DRIVE_AVAILABLE = False
+    print("Google Drive libraries not installed. Install with: pip install google-api-python-client google-auth")
 
 # Try to load environment variables from .env file
 try:
@@ -126,67 +130,82 @@ SCORING_PROMPT = (
     "}"
 )
 
-# Storage configuration - supports OneDrive or local file
-USE_ONEDRIVE = os.environ.get('ONEDRIVE_ACCESS_TOKEN') is not None
-ONEDRIVE_ACCESS_TOKEN = os.environ.get('ONEDRIVE_ACCESS_TOKEN')
-ONEDRIVE_FILE_NAME = os.environ.get('ONEDRIVE_FILE_NAME', 'conversations.json')
-ONEDRIVE_FOLDER_PATH = os.environ.get('ONEDRIVE_FOLDER_PATH', 'InterviewChatbot')
+# Storage configuration - supports Google Drive or local file
+GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE = os.environ.get('GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON')
+GOOGLE_DRIVE_FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID')
+GOOGLE_DRIVE_FILE_NAME = os.environ.get('GOOGLE_DRIVE_FILE_NAME', 'conversations.json')
+USE_GOOGLE_DRIVE = GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE is not None
 
 # Local file storage (fallback)
 STORAGE_PATH = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', os.path.dirname(os.path.abspath(__file__)))
 CONVERSATIONS_FILE = os.path.join(STORAGE_PATH, "conversations.json")
 
-def get_onedrive_file_id():
-    """Get OneDrive file ID if file exists, or None if it doesn't"""
-    if not ONEDRIVE_AVAILABLE or not USE_ONEDRIVE:
+def get_google_drive_service():
+    """Get Google Drive service client"""
+    if not GOOGLE_DRIVE_AVAILABLE or not USE_GOOGLE_DRIVE:
         return None
     
     try:
-        # First, check if folder exists, create if not
-        folder_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{ONEDRIVE_FOLDER_PATH}"
-        headers = {
-            'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}',
-            'Content-Type': 'application/json'
-        }
+        # Parse service account JSON from environment variable
+        service_account_info = json.loads(GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE)
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=['https://www.googleapis.com/auth/drive.file']
+        )
+        service = build('drive', 'v3', credentials=credentials)
+        return service
+    except Exception as e:
+        print(f"Error creating Google Drive service: {e}")
+        return None
+
+def get_google_drive_file_id(service):
+    """Get Google Drive file ID if file exists, or None if it doesn't"""
+    if not service:
+        return None
+    
+    try:
+        # Search for file in the specified folder (or root if no folder)
+        if GOOGLE_DRIVE_FOLDER_ID:
+            query = f"name='{GOOGLE_DRIVE_FILE_NAME}' and '{GOOGLE_DRIVE_FOLDER_ID}' in parents and trashed=false"
+        else:
+            query = f"name='{GOOGLE_DRIVE_FILE_NAME}' and trashed=false"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
+        files = results.get('files', [])
         
-        # Check if folder exists
-        response = requests.get(folder_url, headers=headers)
-        if response.status_code == 404:
-            # Create folder
-            folder_create_url = "https://graph.microsoft.com/v1.0/me/drive/root/children"
-            folder_data = {
-                "name": ONEDRIVE_FOLDER_PATH,
-                "folder": {}
-            }
-            requests.post(folder_create_url, headers=headers, json=folder_data)
-        
-        # Check if file exists
-        file_url = f"{folder_url}/{ONEDRIVE_FILE_NAME}"
-        response = requests.get(file_url, headers=headers)
-        if response.status_code == 200:
-            return response.json().get('id')
+        if files:
+            return files[0]['id']
         return None
     except Exception as e:
-        print(f"Error checking OneDrive file: {e}")
+        print(f"Error checking Google Drive file: {e}")
         return None
 
 def load_conversations():
-    """Load conversations from OneDrive or local file"""
-    if USE_ONEDRIVE:
-        try:
-            file_id = get_onedrive_file_id()
-            if file_id:
-                # File exists, download it
-                download_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}/content"
-                headers = {'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}'}
-                response = requests.get(download_url, headers=headers)
-                if response.status_code == 200:
-                    return json.loads(response.text)
-            # File doesn't exist yet, return empty dict
-            return {}
-        except Exception as e:
-            print(f"Error loading from OneDrive: {e}")
-            print("Falling back to local file storage...")
+    """Load conversations from Google Drive or local file"""
+    if USE_GOOGLE_DRIVE:
+        service = get_google_drive_service()
+        if service:
+            try:
+                file_id = get_google_drive_file_id(service)
+                if file_id:
+                    # File exists, download it
+                    request = service.files().get_media(fileId=file_id)
+                    file_content = io.BytesIO()
+                    downloader = MediaIoBaseDownload(file_content, request)
+                    done = False
+                    while done is False:
+                        status, done = downloader.next_chunk()
+                    
+                    file_content.seek(0)
+                    content = file_content.read().decode('utf-8')
+                    return json.loads(content)
+                # File doesn't exist yet, return empty dict
+                return {}
+            except HttpError as e:
+                print(f"Error loading from Google Drive: {e}")
+                print("Falling back to local file storage...")
+            except Exception as e:
+                print(f"Error loading from Google Drive: {e}")
+                print("Falling back to local file storage...")
     
     # Fallback to local file
     try:
@@ -199,35 +218,43 @@ def load_conversations():
         return {}
 
 def save_conversations(conversations):
-    """Save conversations to OneDrive or local file"""
-    if USE_ONEDRIVE:
-        try:
-            content = json.dumps(conversations, indent=2)
-            file_id = get_onedrive_file_id()
-            
-            folder_url = f"https://graph.microsoft.com/v1.0/me/drive/root:/{ONEDRIVE_FOLDER_PATH}"
-            headers = {
-                'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}',
-                'Content-Type': 'application/json'
-            }
-            
-            if file_id:
-                # File exists, update it
-                upload_url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}/content"
-                response = requests.put(upload_url, headers={'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}'}, data=content.encode('utf-8'))
-                if response.status_code in [200, 201]:
-                    return
-            else:
-                # File doesn't exist, create it
-                upload_url = f"{folder_url}/{ONEDRIVE_FILE_NAME}:/content"
-                response = requests.put(upload_url, headers={'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}'}, data=content.encode('utf-8'))
-                if response.status_code in [200, 201]:
-                    return
-            print(f"Error saving to OneDrive: Status {response.status_code}")
-            print("Falling back to local file storage...")
-        except Exception as e:
-            print(f"Error saving to OneDrive: {e}")
-            print("Falling back to local file storage...")
+    """Save conversations to Google Drive or local file"""
+    if USE_GOOGLE_DRIVE:
+        service = get_google_drive_service()
+        if service:
+            try:
+                content = json.dumps(conversations, indent=2)
+                file_id = get_google_drive_file_id(service)
+                
+                file_metadata = {
+                    'name': GOOGLE_DRIVE_FILE_NAME
+                }
+                if GOOGLE_DRIVE_FOLDER_ID:
+                    file_metadata['parents'] = [GOOGLE_DRIVE_FOLDER_ID]
+                
+                media = MediaIoBaseUpload(io.BytesIO(content.encode('utf-8')), mimetype='application/json', resumable=True)
+                
+                if file_id:
+                    # File exists, update it
+                    service.files().update(
+                        fileId=file_id,
+                        body=file_metadata,
+                        media_body=media
+                    ).execute()
+                else:
+                    # File doesn't exist, create it
+                    service.files().create(
+                        body=file_metadata,
+                        media_body=media,
+                        fields='id'
+                    ).execute()
+                return
+            except HttpError as e:
+                print(f"Error saving to Google Drive: {e}")
+                print("Falling back to local file storage...")
+            except Exception as e:
+                print(f"Error saving to Google Drive: {e}")
+                print("Falling back to local file storage...")
     
     # Fallback to local file
     try:
@@ -1014,27 +1041,28 @@ def health():
         key_present = False
     
     # Check storage configuration
-    storage_type = "OneDrive" if USE_ONEDRIVE else "local"
+    storage_type = "Google Drive" if USE_GOOGLE_DRIVE else "local"
     storage_info = {}
     
-    if USE_ONEDRIVE:
-        # Test OneDrive connection
-        onedrive_working = False
+    if USE_GOOGLE_DRIVE:
+        # Test Google Drive connection
+        gdrive_working = False
         try:
-            test_url = "https://graph.microsoft.com/v1.0/me/drive/root"
-            headers = {'Authorization': f'Bearer {ONEDRIVE_ACCESS_TOKEN}'}
-            response = requests.get(test_url, headers=headers)
-            onedrive_working = response.status_code == 200
+            service = get_google_drive_service()
+            if service:
+                # Try to list files (quick connection test)
+                service.files().list(pageSize=1).execute()
+                gdrive_working = True
         except:
             pass
         
         storage_info = {
-            "type": "OneDrive",
-            "folder_path": ONEDRIVE_FOLDER_PATH,
-            "file_name": ONEDRIVE_FILE_NAME,
-            "onedrive_available": ONEDRIVE_AVAILABLE,
-            "onedrive_configured": onedrive_working,
-            "access_token_set": bool(ONEDRIVE_ACCESS_TOKEN)
+            "type": "Google Drive",
+            "folder_id": GOOGLE_DRIVE_FOLDER_ID,
+            "file_name": GOOGLE_DRIVE_FILE_NAME,
+            "gdrive_available": GOOGLE_DRIVE_AVAILABLE,
+            "gdrive_configured": gdrive_working,
+            "service_account_set": bool(GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE)
         }
     else:
         storage_path = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', 'Not set')
