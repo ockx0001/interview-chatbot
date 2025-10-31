@@ -919,9 +919,22 @@ def health():
         key_present = bool(OPENAI_API_KEY)
     except Exception:
         key_present = False
+    
+    # Check storage configuration
+    storage_path = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', 'Not set')
+    storage_path_exists = os.path.exists(STORAGE_PATH) if storage_path != 'Not set' else False
+    conversations_file_exists = os.path.exists(CONVERSATIONS_FILE)
+    
     return jsonify({
         "status": "ok",
-        "openai_key_present": key_present
+        "openai_key_present": key_present,
+        "storage_config": {
+            "volume_mount_path_env": storage_path,
+            "storage_path": STORAGE_PATH,
+            "storage_path_exists": storage_path_exists,
+            "conversations_file_exists": conversations_file_exists,
+            "conversations_file_path": CONVERSATIONS_FILE
+        }
     })
 
 @app.route('/')
