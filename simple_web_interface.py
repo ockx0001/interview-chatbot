@@ -1288,6 +1288,60 @@ def link_personal_id():
     else:
         return jsonify({"error": "Readable ID not found"}), 404
 
+@app.route('/export_all', methods=['GET'])
+def export_all():
+    """Export all conversations with personal IDs linked - complete data export"""
+    print("Export all endpoint called")
+    
+    # Save current conversations first
+    save_conversations(user_sessions)
+    
+    # Build comprehensive export with all data linked
+    export_data = []
+    
+    for user_id, conversation in user_sessions.items():
+        unique_id = None
+        readable_id = None
+        personal_id = None
+        
+        # Extract metadata from conversation
+        for message in conversation:
+            if message["role"] == "system" and message["content"].startswith("UNIQUE_ID:"):
+                unique_id = message["content"].replace("UNIQUE_ID:", "").strip()
+            elif message["role"] == "system" and message["content"].startswith("READABLE_ID:"):
+                readable_id = message["content"].replace("READABLE_ID:", "").strip()
+            elif message["role"] == "system" and message["content"].startswith("PERSONAL_ID:"):
+                personal_id = message["content"].replace("PERSONAL_ID:", "").strip()
+        
+        # Extract actual conversation (exclude system messages)
+        conversation_text = []
+        for message in conversation:
+            if message["role"] != "system":
+                conversation_text.append({
+                    "role": message["role"],
+                    "content": message["content"]
+                })
+        
+        # Add to export
+        if readable_id:  # Only include if has readable_id
+            export_data.append({
+                "readable_id": readable_id,
+                "unique_id": unique_id,
+                "personal_id": personal_id,  # Will be None if not linked yet
+                "user_id": user_id,
+                "message_count": len(conversation_text),
+                "conversation": conversation_text  # Full conversation text
+            })
+    
+    # Return as downloadable JSON
+    from flask import Response
+    output = json.dumps(export_data, indent=2)
+    return Response(
+        output,
+        mimetype='application/json',
+        headers={'Content-Disposition': 'attachment; filename=interview_data_with_ids.json'}
+    )
+
 if __name__ == '__main__':
     print(f"Starting Interview Chatbot on {config['host']}:{config['port']}")
     print(f"Debug mode: {config['debug']}")
