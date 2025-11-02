@@ -9,7 +9,7 @@ import openai
 import uuid
 import hashlib
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_file
 
 # Google Drive support for external storage
 try:
@@ -1208,21 +1208,85 @@ def export_mapping():
     for user_id, conversation in user_sessions.items():
         unique_id = None
         readable_id = None
+        personal_id = None
         
         for message in conversation:
             if message["role"] == "system" and message["content"].startswith("UNIQUE_ID:"):
                 unique_id = message["content"].replace("UNIQUE_ID:", "").strip()
             elif message["role"] == "system" and message["content"].startswith("READABLE_ID:"):
                 readable_id = message["content"].replace("READABLE_ID:", "").strip()
+            elif message["role"] == "system" and message["content"].startswith("PERSONAL_ID:"):
+                personal_id = message["content"].replace("PERSONAL_ID:", "").strip()
         
         if unique_id and readable_id:
             mapping[readable_id] = {
                 "unique_id": unique_id,
                 "user_id": user_id,
+                "personal_id": personal_id,  # Personal ID from survey
                 "message_count": len([m for m in conversation if m["role"] != "system"])
             }
     
     return jsonify(mapping)
+
+@app.route('/download_conversations', methods=['GET'])
+def download_conversations():
+    """Download all conversations as JSON file - simple file download"""
+    print("Download conversations endpoint called")
+    
+    try:
+        # Save current conversations first
+        save_conversations(user_sessions)
+        
+        # Try to read from file if it exists
+        if os.path.exists(CONVERSATIONS_FILE):
+            return send_file(CONVERSATIONS_FILE, as_attachment=True, mimetype='application/json')
+        else:
+            # Return current in-memory conversations as JSON download
+            from flask import Response
+            output = json.dumps(user_sessions, indent=2)
+            return Response(
+                output,
+                mimetype='application/json',
+                headers={'Content-Disposition': 'attachment; filename=conversations.json'}
+            )
+    except Exception as e:
+        print(f"Error downloading conversations: {e}")
+        # Fallback: return as JSON download
+        from flask import Response
+        output = json.dumps(user_sessions, indent=2)
+        return Response(
+            output,
+            mimetype='application/json',
+            headers={'Content-Disposition': 'attachment; filename=conversations.json'}
+        )
+
+@app.route('/link_personal_id', methods=['POST'])
+def link_personal_id():
+    """Link a personal ID from survey to an interview session"""
+    print("Link personal ID endpoint called")
+    readable_id = request.json.get("readable_id")  # The ID shown to user (e.g., 3141-5856)
+    personal_id = request.json.get("personal_id")   # Personal ID from survey
+    
+    if not readable_id or not personal_id:
+        return jsonify({"error": "Both readable_id and personal_id are required"}), 400
+    
+    # Find the conversation with this readable_id
+    found = False
+    for user_id, conversation in user_sessions.items():
+        for message in conversation:
+            if message["role"] == "system" and message["content"].startswith(f"READABLE_ID: {readable_id}"):
+                # Add personal ID to conversation
+                conversation.append({"role": "system", "content": f"PERSONAL_ID: {personal_id}"})
+                save_conversations(user_sessions)
+                found = True
+                break
+        if found:
+            break
+    
+    if found:
+        return jsonify({"success": True, "message": "Personal ID linked successfully"})
+    else:
+        return jsonify({"error": "Readable ID not found"}), 404
 
 if __name__ == '__main__':
     print(f"Starting Interview Chatbot on {config['host']}:{config['port']}")
