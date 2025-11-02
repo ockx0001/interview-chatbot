@@ -131,10 +131,16 @@ SCORING_PROMPT = (
 )
 
 # Storage configuration - supports Google Drive or local file
+# Check if Google Drive variables are set AND valid (not empty or placeholder)
 GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE = os.environ.get('GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON')
 GOOGLE_DRIVE_FOLDER_ID = os.environ.get('GOOGLE_DRIVE_FOLDER_ID')
 GOOGLE_DRIVE_FILE_NAME = os.environ.get('GOOGLE_DRIVE_FILE_NAME', 'conversations.json')
-USE_GOOGLE_DRIVE = GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE is not None
+
+# Only use Google Drive if service account JSON is set and valid (not empty/placeholder)
+USE_GOOGLE_DRIVE = (
+    GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE is not None and 
+    GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE.strip() not in ['', '{}', 'placeholder', 'none']
+)
 
 # Local file storage (fallback)
 STORAGE_PATH = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', os.path.dirname(os.path.abspath(__file__)))
